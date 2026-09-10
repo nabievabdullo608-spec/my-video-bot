@@ -1,14 +1,15 @@
 import telebot
-import requests
+import yt_dlp
 import os
 import threading
 from flask import Flask
 
 TOKEN = '8688120815:AAEgoIz2y3t_cbcKaukXOPBoA9HY4Lo90Cc'
 bot = telebot.TeleBot(TOKEN)
+
+# Веб-сервер для удержания бота в сети 24/7
 app = Flask(__name__)
 
-# --- ХИТРОСТЬ: ВЕБ-СЕРВЕР ДЛЯ ОБХОДА ЗАСЫПАНИЯ ---
 @app.route('/')
 def home():
     return "Бот жив и работает 24/7!"
@@ -19,45 +20,47 @@ def run_web():
 
 def keep_alive():
     threading.Thread(target=run_web).start()
-# ------------------------------------------------
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    bot.send_message(message.chat.id, "Привет! Отправь ссылку (YouTube, TikTok, Instagram), и я скачаю видео через секретный API.")
+    bot.send_message(message.chat.id, "Привет! Отправь мне ссылку на видео, и я скачаю его.")
 
 @bot.message_handler(func=lambda message: True)
 def download_and_send_video(message):
     url = message.text
-    msg = bot.send_message(message.chat.id, "Магия вне Хогвартса... Ищу видео ⏳")
+    msg = bot.send_message(message.chat.id, "Скачиваю видео... Подожди немного ⏳")
 
-    # Настройки для обращения к стороннему API
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
+    ydl_opts = {
+        'format': 'best[ext=mp4]/best',
+        'outtmpl': f'video_{message.chat.id}_%(id)s.%(ext)s',
+        'max_filesize': 50000000, # Лимит Telegram 50 МБ
+        'noplaylist': True,
+        'quiet': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios']
+            }
+        }
     }
-    data = {"url": url}
 
     try:
-        # Стучимся в публичный сервис, который скачивает всё сам без куки
-        response = requests.post("https://api.cobalt.tools/api/json", json=data, headers=headers)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+
+        bot.edit_message_text("Отправляю в Telegram... 🚀", chat_id=message.chat.id, message_id=msg.message_id)
         
-        if response.status_code == 200:
-            res_json = response.json()
-            video_url = res_json.get("url")
-            
-            if video_url:
-                bot.edit_message_text("Отправляю видео... 🚀", chat_id=message.chat.id, message_id=msg.message_id)
-                # Телеграм сам скачает видео по этой ссылке!
-                bot.send_video(message.chat.id, video_url)
-            else:
-                bot.edit_message_text("❌ API не смог вытащить прямую ссылку на видео.", chat_id=message.chat.id, message_id=msg.message_id)
-        else:
-            bot.edit_message_text("❌ Сервис временно перегружен или недоступен. Попробуй позже.", chat_id=message.chat.id, message_id=msg.message_id)
+        with open(filename, 'rb') as video_file:
+            bot.send_video(message.chat.id, video_file, timeout=120)
+
+        if os.path.exists(filename):
+            os.remove(filename)
 
     except Exception as e:
-        bot.edit_message_text("❌ Произошла ошибка соединения с сервером.", chat_id=message.chat.id, message_id=msg.message_id)
+        bot.edit_message_text("❌ Не удалось скачать видео. Возможно, ссылка защищена или файл слишком большой.", chat_id=message.chat.id, message_id=msg.message_id)
+        print(f"Error: {e}")
 
 if __name__ == '__main__':
-    keep_alive() # Запускаем веб-сервер
+    keep_alive()
     print("Бот запущен...")
     bot.polling(none_stop=True)
