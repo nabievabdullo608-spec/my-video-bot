@@ -1,15 +1,14 @@
 import telebot
-import yt_dlp
+import requests
 import os
 import threading
 from flask import Flask
 
 TOKEN = '8962021834:AAHQDtC7s1tQ9TugW7tCwkVIDY8RljR6t7E'
 bot = telebot.TeleBot(TOKEN)
-
-# --- ХИТРОСТЬ: ВЕБ-СЕРВЕР ДЛЯ ОБХОДА ЗАСЫПАНИЯ ---
 app = Flask(__name__)
 
+# --- ХИТРОСТЬ: ВЕБ-СЕРВЕР ДЛЯ ОБХОДА ЗАСЫПАНИЯ ---
 @app.route('/')
 def home():
     return "Бот жив и работает 24/7!"
@@ -19,43 +18,44 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 def keep_alive():
-    t = threading.Thread(target=run_web)
-    t.start()
+    threading.Thread(target=run_web).start()
 # ------------------------------------------------
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    bot.send_message(message.chat.id, "Привет! Отправь ссылку, и я скачаю видео.")
+    bot.send_message(message.chat.id, "Привет! Отправь ссылку (YouTube, TikTok, Instagram), и я скачаю видео через секретный API.")
 
 @bot.message_handler(func=lambda message: True)
 def download_and_send_video(message):
     url = message.text
-    msg = bot.send_message(message.chat.id, "Пытаюсь скачать... ⏳")
+    msg = bot.send_message(message.chat.id, "Магия вне Хогвартса... Ищу видео ⏳")
 
-    ydl_opts = {
-        'format': 'best[ext=mp4]/best',
-        'outtmpl': f'video_{message.chat.id}_%(id)s.%(ext)s', 
-        'max_filesize': 50000000, 
-        'noplaylist': True,       
-        'quiet': True,
-        'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}
+    # Настройки для обращения к стороннему API
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
     }
+    data = {"url": url}
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            bot.edit_message_text("Качаю... 📥", chat_id=message.chat.id, message_id=msg.message_id)
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-
-        bot.edit_message_text("Отправляю... 🚀", chat_id=message.chat.id, message_id=msg.message_id)
-        with open(filename, 'rb') as video_file:
-            bot.send_video(message.chat.id, video_file, timeout=120)
-
-        if os.path.exists(filename):
-            os.remove(filename)
+        # Стучимся в публичный сервис, который скачивает всё сам без куки
+        response = requests.post("https://api.cobalt.tools/api/json", json=data, headers=headers)
+        
+        if response.status_code == 200:
+            res_json = response.json()
+            video_url = res_json.get("url")
+            
+            if video_url:
+                bot.edit_message_text("Отправляю видео... 🚀", chat_id=message.chat.id, message_id=msg.message_id)
+                # Телеграм сам скачает видео по этой ссылке!
+                bot.send_video(message.chat.id, video_url)
+            else:
+                bot.edit_message_text("❌ API не смог вытащить прямую ссылку на видео.", chat_id=message.chat.id, message_id=msg.message_id)
+        else:
+            bot.edit_message_text("❌ Сервис временно перегружен или недоступен. Попробуй позже.", chat_id=message.chat.id, message_id=msg.message_id)
 
     except Exception as e:
-        bot.edit_message_text("❌ Ошибка. Скорее всего соцсеть не пускает или видео слишком большое.", chat_id=message.chat.id, message_id=msg.message_id)
+        bot.edit_message_text("❌ Произошла ошибка соединения с сервером.", chat_id=message.chat.id, message_id=msg.message_id)
 
 if __name__ == '__main__':
     keep_alive() # Запускаем веб-сервер
